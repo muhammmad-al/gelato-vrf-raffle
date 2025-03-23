@@ -208,7 +208,7 @@ contract NFTRaffle is GelatoVRFConsumerBase {
     function _fulfillRandomness(
         uint256 randomness,
         uint256 requestId,
-        bytes memory extraData
+        bytes memory 
     ) internal override {
         require(requestId == randomnessRequestId, "Invalid request ID");
         require(!raffleExecuted, "Raffle already executed");
