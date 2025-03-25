@@ -121,8 +121,11 @@ contract NFTRaffle is GelatoVRFConsumerBase {
     // Owner of the raffle contract
     address public immutable owner;
     
-    // Number of winners to select
-    uint256 public constant NUM_WINNERS = 100;
+    // Number of winners to select - now can be changed by owner
+    uint256 public numWinners = 100;
+    
+    // Timestamp when minting is considered complete
+    uint256 public mintingEndTime;
     
     // Raffle state variables
     bool public raffleExecuted;
@@ -138,18 +141,27 @@ contract NFTRaffle is GelatoVRFConsumerBase {
     // Events
     event RaffleStarted(uint256 requestId);
     event RaffleCompleted(uint256[] winningTokenIds, address[] winningAddresses);
+    event MintingEndTimeSet(uint256 endTime);
+    event NumWinnersSet(uint256 newNumWinners);
     
     /**
      * @dev Constructor
      * @param _nftContract Address of the NFT contract
      * @param _gelatoOperator Address of the Gelato VRF operator
+     * @param _mintingEndTime Timestamp when minting is considered complete
      */
-    constructor(address _nftContract, address _gelatoOperator) {
+    constructor(
+        address _nftContract, 
+        address _gelatoOperator,
+        uint256 _mintingEndTime
+    ) {
         require(_nftContract != address(0), "Invalid NFT contract address");
         require(_gelatoOperator != address(0), "Invalid Gelato operator address");
+        require(_mintingEndTime > block.timestamp, "Minting end time must be in the future");
         
         nftContract = _nftContract;
         gelatoOperator = _gelatoOperator;
+        mintingEndTime = _mintingEndTime;
         owner = msg.sender;
     }
     
@@ -169,22 +181,35 @@ contract NFTRaffle is GelatoVRFConsumerBase {
     }
     
     /**
-     * @dev Check if minting is complete in the NFT contract by checking total supply
+     * @dev Set the number of winners to select
+     * @param _numWinners New number of winners
+     */
+    function setNumWinners(uint256 _numWinners) external onlyOwner {
+        require(_numWinners > 0, "Number of winners must be greater than 0");
+        require(!raffleExecuted, "Raffle already executed");
+        
+        numWinners = _numWinners;
+        emit NumWinnersSet(_numWinners);
+    }
+    
+    /**
+     * @dev Set the timestamp when minting is considered complete
+     * @param _mintingEndTime New minting end time
+     */
+    function setMintingEndTime(uint256 _mintingEndTime) external onlyOwner {
+        require(_mintingEndTime > block.timestamp, "Minting end time must be in the future");
+        require(!raffleExecuted, "Raffle already executed");
+        
+        mintingEndTime = _mintingEndTime;
+        emit MintingEndTimeSet(_mintingEndTime);
+    }
+    
+    /**
+     * @dev Check if minting is complete based on block timestamp
      * @return isComplete True if minting is complete, false otherwise
      */
-    function checkMintingStatus() external view returns (bool isComplete) {
-        try INFT(nftContract).supply() returns (uint256 supply) {
-            // If we can get the supply, we assume minting is complete if it's > 0
-            return supply > 0;
-        } catch {
-            try INFT(nftContract).totalSupply() returns (uint256 totalSupply) {
-                // Fallback to totalSupply if supply() doesn't exist
-                return totalSupply > 0;
-            } catch {
-                // If we can't determine supply, we assume minting is not complete
-                return false;
-            }
-        }
+    function isMintingComplete() public view returns (bool) {
+        return block.timestamp >= mintingEndTime;
     }
     
     /**
@@ -193,6 +218,25 @@ contract NFTRaffle is GelatoVRFConsumerBase {
      */
     function startRaffle() external onlyOwner returns (uint256 requestId) {
         require(!raffleExecuted, "Raffle already executed");
+        require(isMintingComplete(), "Minting is not complete yet");
+        
+        // Additional check to ensure there are tokens to raffle
+        uint256 totalSupply;
+        bool hasTokens = false;
+        
+        try INFT(nftContract).supply() returns (uint256 supply) {
+            totalSupply = supply;
+            hasTokens = supply > 0;
+        } catch {
+            try INFT(nftContract).totalSupply() returns (uint256 supply) {
+                totalSupply = supply;
+                hasTokens = supply > 0;
+            } catch {
+                revert("Failed to get total supply");
+            }
+        }
+        
+        require(hasTokens, "No tokens available for raffle");
         
         // Request randomness with empty extraData
         requestId = _requestRandomness("");
@@ -251,9 +295,9 @@ contract NFTRaffle is GelatoVRFConsumerBase {
             selectedTokens[winningTokenIds[i]] = false;
         }
         
-        // Determine how many winners to select (up to NUM_WINNERS)
-        uint256 winnersToSelect = NUM_WINNERS;
-        if (_totalTokens < NUM_WINNERS) {
+        // Determine how many winners to select (up to numWinners)
+        uint256 winnersToSelect = numWinners;
+        if (_totalTokens < numWinners) {
             winnersToSelect = _totalTokens;
         }
         
